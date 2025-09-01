@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Leaflet Map with Embedded CO₂ Chart</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+
+    /* Custom style for chart control */
+    .chart-control {
+      background-color: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    }
+    #co2Chart {
+      width: 250px;
+      height: 200px;
+    }
+
+    /* Dropdown styling */
+    #projektFilter {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      padding: 5px;
+      background: white;
+      border: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+
+<select id="projektFilter">
+  <option value="all">All Projects</option>
+</select>
+
+<div id="map"></div>
+
+<!-- JS Libraries -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+  const map = L.map('map');
+  let geojsonLayer;
+  let geojsonData;
+  let co2Chart;
+
+  // Create Leaflet control for chart
+  const chartControl = L.control({ position: 'topright' });
+  chartControl.onAdd = function () {
+    const div = L.DomUtil.create('div', 'chart-control');
+    div.innerHTML = '<canvas id="co2Chart"></canvas>';
+    return div;
+  };
+  chartControl.addTo(map);
+
+  // Load GeoJSON
+  fetch('geodata_energy.geojson')
+    .then(res => res.json())
+    .then(data => {
+      geojsonData = data;
+
+      // Fill dropdown with unique energy_projekt_id values
+      const ids = new Set();
+      data.features.forEach(f => {
+        if (f.properties.energy_energy_projekt_id) ids.add(f.properties.energy_projekt_id);
+      });
+
+      const select = document.getElementById("projektFilter");
+      Array.from(ids).sort().forEach(id => {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        select.appendChild(opt);
+      });
+
+      updateLayer("all");
+      updateChart("all");
+    });
+
+  function updateLayer(projektId) {
+    if (geojsonLayer) map.removeLayer(geojsonLayer);
+
+    geojsonLayer = L.geoJSON(geojsonData, {
+      filter: f => projektId === "all" || f.properties.energy_projekt_id === projektId,
+      onEachFeature: (feature, layer) => {
+        layer.bindPopup(Object.entries(feature.properties)
+          .map(([k, v]) => `<strong>${k}</strong>: ${v}`).join('<br>'));
+      },
+      style: {
+        color: "#0074D9",
+        weight: 2,
+        fillOpacity: 0.3
+      }
+    }).addTo(map);
+
+    const bounds = geojsonLayer.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds);
+  }
+
+  function updateChart(projektId) {
+    const filtered = geojsonData.features.filter(f =>
+      projektId === "all" || f.properties.energy_projekt_id === projektId
+    );
+
+    // Aggregate CO₂ values
+    let beginTotal = 0, endTotal = 0, count = 0;
+    filtered.forEach(f => {
+      const b = parseFloat(f.properties.energy_begin_co2_from_energy_demand);
+      const e = parseFloat(f.properties.energy_end_co2_from_energy_demand);
+      if (!isNaN(b) && !isNaN(e)) {
+        beginTotal += b;
+        endTotal += e;
+        count++;
+      }
+    });
+
+    // Optionally use average instead of total
+    const beginValue = count > 0 ? beginTotal : 0;
+    const endValue = count > 0 ? endTotal : 0;
+
+    const ctx = document.getElementById("co2Chart").getContext("2d");
+    if (co2Chart) co2Chart.destroy(); // destroy existing chart
+
+    co2Chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['Begin CO₂', 'End CO₂'],
+        datasets: [{
+          label: 'CO₂ from Energy Demand (kg)',
+          data: [beginValue, endValue],
+          backgroundColor: ['#FF4136', '#2ECC40']
+        }]
+      },
+      options: {
+        responsive: false,
+        plugins: {
+          legend: { display: true },
+          title: {
+            display: true,
+            text: projektId === "all" ? 'All Projects' : `Project: ${projektId}`
+          }
+        },
+        scales: {
+          y: {
+            title: {
+              display: true,
+              text: 'CO₂ (kg)'
+            },
+            beginAtZero: true
+          },
+          x: {
+            title: {
+              display: true,
+              text: ''
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Handle dropdown changes
+  document.getElementById("projektFilter").addEventListener("change", function () {
+    const selected = this.value;
+    updateLayer(selected);
+    updateChart(selected);
+  });
+</script>
+
+</body>
+</html>
